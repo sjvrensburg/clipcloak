@@ -76,14 +76,31 @@ span_rep + scorer + classifier), orchestrated by gliner2-rs. fp16 ≈ 620 MB.
 
 ## Gotchas (learned the hard way)
 
-- **`ort` version pinning:** pin BOTH `ort` and `ort-sys` to `=2.0.0-rc.9` in
-  `server/Cargo.toml` and `server/vendor-gliner2-rs/Cargo.toml`. A looser req
-  pulls rc.12 (vitis.rs compile error) or a mismatched ort-sys (OrtApi field
-  errors).
-- **`ort` `ndarray` feature** must be enabled in the vendored Cargo.toml, or the
-  lib fails with `IntoValueTensor` / `try_extract_tensor` errors.
+- **`ort` version pinning:** pin BOTH `ort` and `ort-sys` to `=2.0.0-rc.13` in
+  `server/Cargo.toml` and `server/vendor-gliner2-rs/Cargo.toml`. rc.13 is the
+  first version with a WebGPU EP; going past rc.9 also means `try_extract_tensor`
+  is now `try_extract_array`, `Session.inputs`/`.outputs` are methods not
+  fields, `ort::inputs!` is infallible (no trailing `?`), `ort::Error`'s `?`
+  no longer auto-converts to `anyhow::Error` (map_err with `"{e}"` instead),
+  and `Session::run`/`run_binding` take `&mut self` — both engines keep their
+  `Session`s behind a `Mutex` because of this (see `gliner2-finetune-pipeline`
+  memory / git history for the full rc.9→rc.13 migration).
+- **`ort` `ndarray` feature** must be enabled in the vendored Cargo.toml (and
+  the crate's own `ndarray` dep kept in lockstep with `ort`'s — 0.17 as of
+  rc.13), or the lib fails with `IntoValueTensor` / `try_extract_array` errors.
 - **`ORT_DYLIB_PATH`** must point at a `libonnxruntime.so` (ort uses
   load-dynamic). `run.sh` auto-finds one.
+- **WebGPU (Vulkan/D3D12/Metal) GPU acceleration is opt-in via
+  `GLINER2_WEBGPU_EP_LIB`:** point it at a `libonnxruntime_providers_webgpu.so`
+  /`.dll`/`.dylib` (e.g. from the `Microsoft.ML.OnnxRuntime.EP.WebGpu` NuGet
+  package) and `gliner2-rs` registers it as an ORT 1.22+ *plugin* EP and
+  attaches the first discovered device. This is NOT the same as the classic
+  named-EP mechanism (`ort::execution_providers::WebGPU` in the fallback
+  chain) — standard prebuilt ONNX Runtime does not compile WebGPU into
+  `libonnxruntime` itself, so that classic entry never actually fires; it's
+  kept only in case some future ORT build compiles WebGPU in-tree. Without
+  the env var (or the library, or a capable device) this is a no-op and
+  everything runs on CPU exactly as before.
 - The V2 engine needs **`tokenizer.json` inside `PII_MODELS_DIR`**.
 - Tune detection with the popup **threshold** (~0.55). gliner2-rs returns
   ~0.999 confidence and a ready-made `redacted` string (`mask_pii_text`).

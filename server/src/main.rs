@@ -45,7 +45,9 @@ fn main() -> anyhow::Result<()> {
     if std::env::var("ORT_DYLIB_PATH").is_err() {
         eprintln!("WARNING: ORT_DYLIB_PATH not set; ort may fail to find libonnxruntime.so");
     }
-    ort::init().with_name("clipcloak-server").commit()?;
+    if !ort::init().with_name("clipcloak-server").commit() {
+        return Err(anyhow::anyhow!("Failed to initialize ONNX Runtime"));
+    }
 
     let model = if let Ok(dir) = std::env::var("PII_MODELS_DIR") {
         ModelSource::LocalDir(dir)
