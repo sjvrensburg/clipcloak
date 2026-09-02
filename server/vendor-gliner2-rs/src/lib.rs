@@ -45,8 +45,48 @@ use ort::{
 };
 use tokenizers::Tokenizer;
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use serde::Serialize;
+
+/// Discovers WebGPU-capable devices for ORT's plugin-EP API.
+///
+/// Standard prebuilt ONNX Runtime does *not* compile WebGPU into
+/// `libonnxruntime` itself — it ships as a separate plugin shared library
+/// (e.g. `Microsoft.ML.OnnxRuntime.EP.WebGpu`'s
+/// `libonnxruntime_providers_webgpu.so`) that must be registered at runtime
+/// via `Environment::register_ep_library`, then discovered via
+/// `Environment::devices()` and attached with `SessionBuilder::with_devices`
+/// — the classic name-based `WebGPU` EP in the fallback chain below only
+/// fires if some *other* ORT build happens to compile WebGPU in-tree.
+///
+/// Point `GLINER2_WEBGPU_EP_LIB` at that plugin library to enable this path.
+/// Absent the env var, the library, or a Vulkan-capable device, this simply
+/// returns an empty list — same graceful "unavailable EP" fallback as
+/// everything else in the chain.
+pub(crate) fn webgpu_devices() -> Vec<ort::device::Device<'static>> {
+    static ENV: OnceLock<Option<std::sync::Arc<ort::environment::Environment>>> = OnceLock::new();
+
+    let env = ENV.get_or_init(|| {
+        let env = ort::environment::Environment::current().ok()?;
+        if let Ok(path) = std::env::var("GLINER2_WEBGPU_EP_LIB") {
+            if let Err(e) = env.register_ep_library("gliner2-webgpu", &path) {
+                eprintln!("[GLiNER2] WebGPU EP library registration failed ({}): {}", path, e);
+            }
+        }
+        Some(env)
+    });
+
+    match env {
+        // The WebGPU plugin EP factory only supports one device at a time
+        // (multiple GPUs/adapters aren't fanned out across sessions), so
+        // take just the first match rather than passing them all.
+        Some(env) => env.devices()
+            .filter(|d| d.ep().map(|ep| ep == "WebGpuExecutionProvider").unwrap_or(false))
+            .take(1)
+            .collect(),
+        None => Vec::new(),
+    }
+}
 
 use processor::SchemaTransformer;
 pub use processor::SchemaTask;
@@ -313,7 +353,7 @@ impl Gliner2EngineV1 {
             builder = builder.with_memory_pattern(false).map_err(|e| anyhow::anyhow!("{e}"))?;
 
             let force_cpu = std::env::var("FORCE_CPU").is_ok();
-            
+
             if force_cpu {
                 builder = builder
                     .with_execution_providers([
@@ -325,6 +365,18 @@ impl Gliner2EngineV1 {
                     ])
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
             } else {
+                let webgpu_devices = webgpu_devices();
+                if !webgpu_devices.is_empty() {
+                    builder = builder
+                        .with_devices(
+                            webgpu_devices,
+                            Some(&[
+                                ("WebGpuExecutionProvider.dawnBackendType".to_string(), "Vulkan".to_string()),
+                                ("WebGpuExecutionProvider.enableInt64".to_string(), "1".to_string()),
+                            ])
+                        )
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                }
                 builder = builder.with_execution_providers([
                     QNN::default().build(),
                     OpenVINO::default().build(),

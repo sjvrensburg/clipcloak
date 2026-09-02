@@ -202,6 +202,18 @@ impl Gliner2EngineV2 {
                     ])
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
             } else {
+                let webgpu_devices = crate::webgpu_devices();
+                if !webgpu_devices.is_empty() {
+                    builder = builder
+                        .with_devices(
+                            webgpu_devices,
+                            Some(&[
+                                ("WebGpuExecutionProvider.dawnBackendType".to_string(), "Vulkan".to_string()),
+                                ("WebGpuExecutionProvider.enableInt64".to_string(), "1".to_string()),
+                            ])
+                        )
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                }
                 builder = builder.with_execution_providers([
                     QNN::default().build(),
                     OpenVINO::default().build(),

@@ -22,9 +22,17 @@ ndarray = "0.17"
 # so the runtime fallback chain in lib.rs / lib_v2.rs keeps compiling;
 # absent EPs gracefully fall back to CPU at session-init time. `webgpu`
 # adds the Dawn-backed WebGPU EP (Vulkan on Linux, D3D12 on Windows, Metal
-# on macOS) — needs an ORT_DYLIB_PATH build with WebGPU compiled in, else
-# it fails registration and the chain falls back the same way.
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "qnn", "cuda", "rocm", "coreml", "openvino", "directml", "tensorrt", "xnnpack", "webgpu", "half"] }
+# on macOS). Standard prebuilt ONNX Runtime does NOT compile WebGPU into
+# libonnxruntime itself — it ships as a separate "plugin EP" shared library
+# (e.g. Microsoft.ML.OnnxRuntime.EP.WebGpu's libonnxruntime_providers_webgpu.so)
+# that must be registered at runtime via the ORT 1.22+ plugin-EP API
+# (`Environment::register_ep_library` + `Environment::devices()` +
+# `SessionBuilder::with_devices`, see the `webgpu_devices()` helper below) —
+# hence `api-22`. Point `GLINER2_WEBGPU_EP_LIB` at that .so/.dll/.dylib to
+# enable it; absent the env var (or the library, or a Vulkan-capable device)
+# it's simply not found and the chain falls back the same way as any other
+# unavailable EP.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "qnn", "cuda", "rocm", "coreml", "openvino", "directml", "tensorrt", "xnnpack", "webgpu", "api-22", "half"] }
 
 # Tokenizer HuggingFace puro Rust (velocissimo, zero overhead Python)
 tokenizers = "0.19.1"
