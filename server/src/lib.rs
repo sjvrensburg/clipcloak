@@ -443,7 +443,9 @@ fn json_response(
 /// Initialise the ONNX Runtime (load-dynamic). Call once before loading a model.
 /// `ORT_DYLIB_PATH` must point at a `libonnxruntime` shared lib.
 pub fn init_ort() -> anyhow::Result<()> {
-    ort::init().with_name("clipcloak-server").commit()?;
+    if !ort::init().with_name("clipcloak-server").commit() {
+        return Err(anyhow::anyhow!("Failed to initialize ONNX Runtime"));
+    }
     Ok(())
 }
 
