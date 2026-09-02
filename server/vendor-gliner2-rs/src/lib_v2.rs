@@ -78,6 +78,14 @@ pub struct Gliner2EngineV2 {
     classifier:         Mutex<Session>,
     tokenizer:          Tokenizer,
     config:             Gliner2Config,
+    /// Device kind for IOBinding's zero-copy intermediate tensors. Must match
+    /// whichever GPU EP the sessions above actually got attached to, or every
+    /// `bind_output_to_device` fails with "Failed to find allocator for
+    /// device" and every request silently eats an IOBinding attempt + OOM
+    /// fallback to Standard mode before it even gets to run inference.
+    /// Matches the EP priority order in `new()`'s fallback chain: WebGPU is
+    /// registered ahead of CUDA/ROCm, so it wins here too when available.
+    iobinding_device: AllocationDevice,
     pub execution_mode: RwLock<ExecutionMode>,
 }
 
@@ -248,6 +256,16 @@ impl Gliner2EngineV2 {
         let tokenizer = Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| anyhow::anyhow!("Errore tokenizer: {}", e))?;
 
+        // Matches the EP priority order below: WebGPU is registered ahead of
+        // CUDA/ROCm, so IOBinding's device memory must target it too when
+        // available, or every bind_output_to_device fails and every request
+        // pays a failed IOBinding attempt before falling back to Standard.
+        let iobinding_device = if !crate::webgpu_devices().is_empty() {
+            AllocationDevice::WEBGPU_BUFFER
+        } else {
+            AllocationDevice::CUDA
+        };
+
         Ok(Self {
             encoder: Mutex::new(encoder),
             token_gather: Mutex::new(token_gather),
@@ -259,6 +277,7 @@ impl Gliner2EngineV2 {
             classifier: Mutex::new(classifier),
             tokenizer,
             config,
+            iobinding_device,
             execution_mode: RwLock::new(ExecutionMode::IoBinding),
         })
     }
@@ -307,8 +326,9 @@ impl Gliner2EngineV2 {
     /// automaticamente il fallback a `extract_standard()`.
     ///
     /// # Nota ROCm
-    /// Attualmente prova prima CUDA (`AllocationDevice::CUDA`).
-    /// Su macchine ROCm-only il primo `run()` fallisce → fallback Standard.
+    /// `self.iobinding_device` sceglie tra `AllocationDevice::WEBGPU_BUFFER`
+    /// e `AllocationDevice::CUDA` (vedi `new()`). Su macchine ROCm-only
+    /// (senza WebGPU) il primo `run()` fallisce comunque → fallback Standard.
     /// TODO: rilevare l'EP attivo e usare `AllocationDevice::HIP` per ROCm.
     fn extract_iobinding(
         &self,
@@ -341,7 +361,7 @@ impl Gliner2EngineV2 {
         // device_mem: tensori intermedi restano su GPU/NPU
         // cpu_out_mem: tensori che devono rientrare su CPU (pred_count, scores)
         let device_mem = oe!(
-            MemoryInfo::new(AllocationDevice::CUDA, 0, AllocatorType::Device, MemoryType::Default),
+            MemoryInfo::new(self.iobinding_device, 0, AllocatorType::Device, MemoryType::Default),
             "device MemoryInfo"
         );
         let cpu_out_mem = oe!(
